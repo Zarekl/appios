@@ -35,7 +35,7 @@ struct HomeView: View {
         return List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(store.schedule.event.name).font(.title2.bold())
+                    Text("⭐️ \(store.schedule.event.name)").font(.title2.bold())
                     Text(store.schedule.event.venue).foregroundStyle(.secondary)
                     SyncStatusLabel().font(.caption)
                     if clock.isSimulated {
