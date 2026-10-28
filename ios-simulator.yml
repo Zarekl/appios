@@ -1,0 +1,77 @@
+# Compila la app para el simulador de iOS en un Mac de GitHub, ejecuta las pruebas,
+# saca capturas y deja el .app listo para abrirlo en Appetize desde el navegador.
+name: iOS simulador
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+      APPETIZE_PUBLIC_KEY: ${{ secrets.APPETIZE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generar proyecto
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Elegir simulador
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -E '^\s+iPhone' | head -1 | grep -oE '[0-9A-F-]{36}')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+
+      - name: Compilar
+        run: |
+          set -o pipefail
+          xcodebuild -project EventoApp.xcodeproj -scheme EventoApp \
+            -configuration Debug -sdk iphonesimulator -destination "id=$UDID" \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build.log | grep -E 'error:|warning: .*EventoApp|BUILD' || true
+          test -d build/Build/Products/Debug-iphonesimulator/EventoApp.app
+
+      - name: Pruebas
+        run: |
+          xcodebuild -project EventoApp.xcodeproj -scheme EventoApp -destination "id=$UDID" \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO test 2>&1 | tail -40
+
+      - name: Abrir la app y sacar capturas
+        run: |
+          mkdir -p capturas
+          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/EventoApp.app
+          xcrun simctl launch "$UDID" com.trescloud.evento
+          sleep 8
+          xcrun simctl io "$UDID" screenshot capturas/1-inicio.png
+          xcrun simctl openurl "$UDID" evento://charla/d1-r1-1
+          sleep 3
+          xcrun simctl io "$UDID" screenshot capturas/2-detalle-charla.png
+          xcrun simctl openurl "$UDID" evento://expositor/sp1
+          sleep 3
+          xcrun simctl io "$UDID" screenshot capturas/3-expositor.png
+
+      - name: Empaquetar .app para Appetize
+        run: |
+          cd build/Build/Products/Debug-iphonesimulator
+          zip -qr "$GITHUB_WORKSPACE/EventoApp-simulador.zip" EventoApp.app
+
+      # Opcional: si configuras los secretos APPETIZE_API_TOKEN y APPETIZE_PUBLIC_KEY,
+      # cada push actualiza la misma app en Appetize.
+      - name: Actualizar en Appetize
+        if: ${{ env.APPETIZE_API_TOKEN != '' && env.APPETIZE_PUBLIC_KEY != '' }}
+        run: |
+          curl --fail -s -X POST "https://$APPETIZE_API_TOKEN@api.appetize.io/v1/apps/$APPETIZE_PUBLIC_KEY" \
+            --form "file=@EventoApp-simulador.zip" --form "platform=ios"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultado-ios
+          path: |
+            EventoApp-simulador.zip
+            capturas/
+            build.log
